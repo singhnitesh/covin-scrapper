@@ -1,7 +1,7 @@
 {
   "name": "covin-scrapper",
   "version": "1.0.0",
-  "description": "Scrappes Cowin website for available slotes",
+  "description": "Scrappes Cowin website for available slots",
   "main": "build/main/index.js",
   "typings": "build/main/index.d.ts",
   "module": "build/module/index.js",
@@ -9,6 +9,7 @@
   "license": "MIT",
   "keywords": [],
   "scripts": {
+    "start": "node build/main/index.js",
     "build": "run-p build:*",
     "build:main": "tsc -p tsconfig.json",
     "build:module": "tsc -p tsconfig.module.json",
@@ -41,7 +42,8 @@
     "node": ">=10"
   },
   "dependencies": {
-    "@bitauth/libauth": "^1.17.1"
+    "@bitauth/libauth": "^1.17.1",
+    "playwright-webkit": "^1.11.0"
   },
   "devDependencies": {
     "@ava/typescript": "^1.1.1",
