@@ -1,7 +1,14 @@
 import { Browser, BrowserContext, Page, webkit } from 'playwright-webkit';
 
-import { askQuestion, setTimeoutPromise } from './user-input.service';
+import {
+  askQuestion,
+  setTimeoutPromise,
+  systemAlert,
+} from './user-input.service';
 
+const selectedSlotClass = 'covin-scrapper-selected';
+/** set min number of slots that should be available before alerting user */
+const minSlotsThreshold = 0;
 export class CovinScrapperService {
   private browser: Browser;
   private context: BrowserContext;
@@ -30,10 +37,14 @@ export class CovinScrapperService {
     },
   ];
 
-  private districtSearchDisplay = 10 * 1000;
+  private districtSearchDisplay = 5 * 1000;
   private loopId: NodeJS.Timeout | null = null;
 
-  constructor(public initialUrl: string) {}
+  constructor(
+    public initialUrl: string,
+    public phoneNumber: string,
+    public personIndex: number
+  ) {}
 
   async initialize() {
     this.browser = await webkit.launch({ headless: false, slowMo: 100 });
@@ -50,13 +61,11 @@ export class CovinScrapperService {
     // wait for reload to complete
     await navigationPromise;
     try {
-      await this.handleAuthentication(page);
-      await this.selectRegisteredPersons(page);
+      await this.handleAuthentication(page, this.phoneNumber);
+      await this.selectRegisteredPersons(page, this.personIndex);
       await this.selectSearchType(page);
       await this.selectState(page);
       await this.loopDistrictSearch(page);
-      // await this.searchByDistrict(page);
-      // await this.lookForAvailableSlots(page);
     } catch (error) {
       console.error(error);
     } finally {
@@ -64,13 +73,11 @@ export class CovinScrapperService {
     }
   }
 
-  async handleAuthentication(page: Page) {
+  async handleAuthentication(page: Page, phoneNumber: string) {
     // wait for phone input element
     await page.waitForSelector('.mat-form-field #mat-input-0');
     await page.click('.mat-form-field #mat-input-0');
     // enter phone number
-    // const phoneNumber = '9652710937';
-    const phoneNumber = '7838585468';
     await page.type('.mat-form-field #mat-input-0', phoneNumber);
     // click phone number submit
     await page.waitForSelector(
@@ -88,7 +95,7 @@ export class CovinScrapperService {
       '.mat-main-field > .mat-form-field > .mat-form-field-wrapper > .mat-form-field-flex > .mat-form-field-infix'
     );
     // enter otp
-    const otp = await askQuestion('Enter OTP');
+    const otp = await askQuestion('Enter OTP:');
     await page.type('.mat-form-field #mat-input-1', otp);
     // click otp submit
     await page.waitForSelector(
@@ -99,22 +106,13 @@ export class CovinScrapperService {
     );
   }
 
-  async selectRegisteredPersons(page: Page) {
+  async selectRegisteredPersons(page: Page, slotIndex = 1) {
     // ideally we should be on schedule page now
     // and need to select
-    await page.waitForSelector(
-      '.sepreetor:nth-child(2) > .md > .cardblockcls > .dose-data > .md > .btnlist > .bordernone > a > .calcls'
-    );
-    await page.click(
-      '.sepreetor:nth-child(2) > .md > .cardblockcls > .dose-data > .md > .btnlist > .bordernone > a > .calcls'
-    );
-
-    // await page.waitForSelector(
-    //   '.md > .schedule-btn-bg > .col-f > .covid-button-desktop > .register-btn'
-    // );
-    // await page.click(
-    //   '.md > .schedule-btn-bg > .col-f > .covid-button-desktop > .register-btn'
-    // );
+    const child = slotIndex + 1;
+    const selector = `.sepreetor:nth-child(${child}) > .md > .cardblockcls > .dose-data > .md > .btnlist > .bordernone > a > .calcls`;
+    await page.waitForSelector(selector);
+    await page.click(selector);
   }
 
   async selectSearchType(page: Page) {
@@ -174,27 +172,36 @@ export class CovinScrapperService {
   }
 
   async lookForAvailableSlots(page: Page) {
-    console.log('looking for slots');
-    return await page.evaluate(() => {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      const document = window.document;
-      const anchors = document.querySelectorAll(
-        '#main-content > app-appointment-table ion-col.slot-available-main > ul > li div.slots-box > div.vaccine-box > a'
-      );
-      const anchorElements = [];
-      anchors.forEach((element) => {
-        anchorElements.push(element.innerHTML);
-      });
-      const availableCount = anchorElements.reduce((acc, text) => {
-        const parsed = +text;
-        if (!isNaN(parsed)) {
-          acc += parsed;
-        }
-        return acc;
-      }, 0);
-      return availableCount;
-    });
+    // console.log('looking for slots');
+    return await page.evaluate(
+      ({ selectedSlotClass, minSlotsThreshold }) => {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        const document = window.document;
+        const anchors = document.querySelectorAll(
+          '#main-content > app-appointment-table ion-col.slot-available-main > ul > li div.slots-box > div.vaccine-box > a'
+        );
+        const anchorElements = [];
+        anchors.forEach((element) => {
+          anchorElements.push(element);
+        });
+        let slotAdded = false;
+        const availableCount = anchorElements.reduce((acc, el) => {
+          const text = el.innerHTML;
+          const parsed = +text;
+          if (!isNaN(parsed)) {
+            acc += parsed;
+            if (parsed > minSlotsThreshold && !slotAdded) {
+              el.classList.add(selectedSlotClass);
+              slotAdded = true;
+            }
+          }
+          return acc;
+        }, 0);
+        return { availableCount, slotAdded };
+      },
+      { selectedSlotClass, minSlotsThreshold }
+    );
   }
 
   async loopDistrictSearch(
@@ -209,15 +216,76 @@ export class CovinScrapperService {
       clearTimeout(this.loopId);
       this.loopId = null;
     }
+    const pageUrl = await page.url();
+    if (pageUrl === this.initialUrl) {
+      throw new Error('session token logout');
+    }
     districtCounter = districtCounter % districts.length;
     const district = districts[districtCounter];
     await this.searchByDistrict(page, district.selector);
-    const available = await this.lookForAvailableSlots(page);
-    console.log(`available - ${available} - ${district.name}`);
+    const { availableCount, slotAdded } = await this.lookForAvailableSlots(
+      page
+    );
+
+    if (availableCount) {
+      console.log(
+        `${new Date()} - available - ${availableCount} - ${district.name}`
+      );
+    }
+
+    let keepSearching = true;
+    if (slotAdded) {
+      systemAlert('Slot Available', 'Fill out slot register details');
+      console.log('proceeding to book slot');
+      const answer = await askQuestion('Slot Available, restart? (y / n):');
+      keepSearching = answer.toLowerCase() === 'y';
+    }
+
+    if (!keepSearching) {
+      throw new Error('User chose to quit');
+    }
+
     const result = await setTimeoutPromise(this.districtSearchDisplay, () =>
       this.loopDistrictSearch(page, districtCounter + 1, districts)
     );
     this.loopId = result.handle;
     return result.promise;
+  }
+
+  async bookSelectedSlot(page: Page) {
+    // select center
+    const selector = `.${selectedSlotClass}`;
+    await page.waitForSelector(selector);
+    await page.click(selector);
+
+    // select slot
+    await page.waitForSelector(
+      '.md > .md > .register-header > .time-slot-list > .time-slot:nth-child(2)'
+    );
+    await page.click(
+      '.md > .md > .register-header > .time-slot-list > .time-slot:nth-child(2)'
+    );
+
+    // focus on code-input
+    await page.waitForSelector(
+      '.md > .covid-button-desktop > .captcha-style > .input-wrap > input'
+    );
+    await page.click(
+      '.md > .covid-button-desktop > .captcha-style > .input-wrap > input'
+    );
+
+    // enter code
+    const captcha = await askQuestion('Enter Captcha:');
+    await page.type(
+      '.md > .covid-button-desktop > .captcha-style > .input-wrap > input',
+      captcha
+    );
+
+    await page.waitForSelector(
+      '.aadhar-otp-submit-form > .md > .md > .covid-button-desktop > .register-btn'
+    );
+    await page.click(
+      '.aadhar-otp-submit-form > .md > .md > .covid-button-desktop > .register-btn'
+    );
   }
 }

@@ -1,5 +1,7 @@
 import readline from 'readline';
 
+import notifier from 'node-notifier';
+
 export function askQuestion(query): Promise<string> {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -49,3 +51,7 @@ export const setTimeoutPromise = <T>(
   });
   return { promise, handle };
 };
+
+export function systemAlert(title: string, message: string) {
+  notifier.notify({ title, message, sound: true });
+}
